@@ -1,0 +1,101 @@
+# Instructions:
+# 1. Create a repository you control to clone a source repository into
+# 2. from the top navigation tabs, click "Actions", and select "New Workflow"
+# 3. Select "set up a workflow yourself", and copy and paste this entire file into the editor.
+# IN THE NEWLY CREATED FILE IN THE EDITOR:
+# 4. Fill out the "CLONE_REPO_GROUP" and "CLONE_REPO_NAME" with the repo you just created.
+#   e.x. If you created the repo: "https://github.com/my_group/my_repo",
+#   then CLONE_REPO_GROUP would be "my_group" and CLONE_REPO_NAME would be "my_repo"
+# 5. Paste the https address of the SOURCE repository you wish to clone into "SOURCE_REPO_URL"
+# 6. In a terminal window, generate a new ssh key using "ssh-keygen".  Name it something useful like
+#    "Github_Workflow_Bot".
+#    NOTE: For github, you must indicate your username when generating SSH keys:
+#    `ssh-keygen -t ed25519 -C "your_email@example.com"`
+#    Read more here: https://docs.github.com/en/authentication/connecting-to-github-with-ssh/generating-a-new-ssh-key-and-adding-it-to-the-ssh-agent
+# 7. In the newly created clone repository, go to "settings" -> "Deploy Keys" under "security" 
+#    in the left-side navigation bar.
+# 8. Click "Add deploy key", add a label, paste the PUBLIC ssh key you just created in this box. 
+#    MAKE SURE YOU SELECT "Allow write access".  Now save the key
+# 9. Now click "Secrets and Variables" -> "actions" in the left-side navigation bar.
+# 10. Click "New Repository Secret", name it "PRIVATE_WORKER_KEY" , and paste the PRIVATE ssh key you just 
+#    created here and save
+
+
+
+name: Mirror Repo
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Schedule the workflow to run daily
+  workflow_dispatch: # Enable manual triggering
+
+env:
+  CLONE_REPO_GROUP: 'naccdata'
+  CLONE_REPO_NAME: 'sidewide-snapshot'
+  SOURCE_REPO_URL: 'https://gitlab.com/flywheel-io/scientific-solutions/gears/sitewide-snapshot'
+  CLONE_REPO_DIR: 'CLONE_REPO'
+  SOURCE_REPO_DIR: 'SOURCE_REPO'
+    
+
+jobs:
+  test_files:
+    runs-on: ubuntu-latest
+    
+    steps:
+
+      - name: Setup git env
+        env:
+          SSH_KEY: ${{ secrets.PRIVATE_WORKER_KEY }} # Use GitHub secrets for the SSH private key
+        run: |
+          git config --global user.email "MirrorBot@example.com"
+          git config --global user.name "MirrorBot"
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan github.com >> ~/.ssh/known_hosts # Fetch and append GitHub's SSH fingerprint
+      
+      - name: Checkout SOURCE repository
+        run: |
+          echo "git clone $SOURCE_REPO_URL"
+          git clone $SOURCE_REPO_URL $SOURCE_REPO_DIR # This must be public so we can just clone
+
+      - name: Reset origin url or SOURCE repo
+        env:
+          CLONE_REPO_URL: git@github.com:${{ env.CLONE_REPO_GROUP }}/${{ env.CLONE_REPO_NAME }}.git
+        run: |
+          cd $SOURCE_REPO_DIR
+          git config --add --local core.sshCommand 'ssh -i ~/.ssh/id_rsa'
+          git fetch -p origin
+          echo "git remote set-url --push origin ${CLONE_REPO_URL}"
+          git remote set-url --push origin ${CLONE_REPO_URL}
+
+      - name: Setup Working Path For CLONE repo
+        run: |
+          mkdir $CLONE_REPO_DIR
+          
+      - name: Checkout CLONE repository
+        env:
+          CLONE_REPO_URL: git@github.com:${{ env.CLONE_REPO_GROUP }}/${{ env.CLONE_REPO_NAME }}.git
+        run: |
+          echo "git clone -c "core.sshCommand=ssh -i ~/.ssh/id_rsa" $CLONE_REPO_URL $CLONE_REPO_DIR"
+          git clone -c "core.sshCommand=ssh -i ~/.ssh/id_rsa" $CLONE_REPO_URL $CLONE_REPO_DIR
+      
+      # - name: Checkout CLONE repository
+      #   uses: actions/checkout@v4 # Use the actions/checkout action to clone the nacc repository
+      #   with:
+      #     repository: ${{ env.CLONE_REPO_GROUP }}/${{ env.CLONE_REPO_NAME }} # Clone repository
+      #     ref: main # Replace with the branch name containing the workflow file
+      #     ssh-key: ${{ secrets.PRIVATE_WORKER_KEY }} # Use the provided GitHub token for authentication
+      #     path: ${{ env.CLONE_REPO_DIR }}
+          
+      - name: Add workflow file to target repository
+        run: |
+          mv $CLONE_REPO_DIR/.github $SOURCE_REPO_DIR
+          cd $SOURCE_REPO_DIR
+          git add .github
+          git commit -m "adding workflow"
+
+      - name: Push
+        run: |
+          cd $SOURCE_REPO_DIR
+          git push --force origin
